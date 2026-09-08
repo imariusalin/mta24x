@@ -112,7 +112,7 @@ cargo run
 
 Console: http://127.0.0.1:8787/console
 
-`network_mode: host` on the engine **and Caddy** is **Linux** (needed so Caddy can reach the engine on `127.0.0.1:8787`; Docker-bridge → host:8787 is a UFW 502). On Docker Desktop, run the engine with `cargo run` instead.
+`network_mode: host` on the engine is **Linux** (SMTP must bind the host IPs). Caddy stays on the Docker bridge and reaches the console through a unix socket (`engine-proxy`). On Docker Desktop, run the engine with `cargo run` instead.
 
 ## CI
 

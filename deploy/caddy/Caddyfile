@@ -4,24 +4,24 @@
 
 {$MAIL_HOSTNAME:mail.example.com} {
 	handle /v1/* {
-		reverse_proxy 127.0.0.1:8787
+		reverse_proxy unix//sock/http.sock
 	}
 	handle /console* {
-		reverse_proxy 127.0.0.1:8787
+		reverse_proxy unix//sock/http.sock
 	}
 	handle /u/* {
-		reverse_proxy 127.0.0.1:8787
+		reverse_proxy unix//sock/http.sock
 	}
 	handle /health {
-		reverse_proxy 127.0.0.1:8787
+		reverse_proxy unix//sock/http.sock
 	}
 	handle /.well-known/mta-sts.txt {
-		reverse_proxy 127.0.0.1:8787
+		reverse_proxy unix//sock/http.sock
 	}
 	handle {
 		# Prefer webmail; if that container is down, serve the engine so the
 		# hostname is never a blank 502.
-		reverse_proxy 127.0.0.1:3000 127.0.0.1:8787 {
+		reverse_proxy webmail:3000 unix//sock/http.sock {
 			lb_policy first
 			fail_duration 10s
 			max_fails 1
@@ -32,9 +32,9 @@
 
 mta-sts.{$ROOT_DOMAIN:example.com} {
 	handle /.well-known/mta-sts.txt {
-		reverse_proxy 127.0.0.1:8787
+		reverse_proxy unix//sock/http.sock
 	}
 	handle {
-		reverse_proxy 127.0.0.1:8787
+		reverse_proxy unix//sock/http.sock
 	}
 }

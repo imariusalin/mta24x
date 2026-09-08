@@ -34,6 +34,24 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # Host-net engine cannot join the compose bridge; UFW drops
+  # docker→host:8787. This sidecar exposes the console as a unix
+  # socket Caddy can dial without crossing iptables.
+  engine-proxy:
+    image: alpine/socat
+    network_mode: host
+    command:
+      [
+        "UNIX-LISTEN:/sock/http.sock,fork,reuseaddr,unlink-early,mode=666",
+        "TCP:127.0.0.1:8787",
+      ]
+    volumes:
+      - ./data/engine-sock:/sock
+    depends_on:
+      engine:
+        condition: service_healthy
+    restart: unless-stopped
+
   stalwart:
     image: stalwartlabs/stalwart:latest
     environment:
@@ -63,8 +81,8 @@ services:
       - ./data/webmail-state:/app/data/admin-state
     depends_on:
       - stalwart
-    ports:
-      - "127.0.0.1:3000:3000"
+    expose:
+      - "3000"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
       interval: 15s
@@ -75,9 +93,10 @@ services:
 
   caddy:
     image: caddy:2-alpine
-    # Same host net as the engine so /console hits 127.0.0.1:8787. Bridge
-    # Caddy → host.docker.internal:8787 is a UFW 502 on Ubuntu.
-    network_mode: host
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
     environment:
       MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.example.com}
       ROOT_DOMAIN: ${ROOT_DOMAIN:-example.com}
@@ -85,6 +104,10 @@ services:
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./data/caddy:/data
+      - ./data/engine-sock:/sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - webmail
+      - engine-proxy
     restart: unless-stopped
