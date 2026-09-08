@@ -27,18 +27,28 @@ Quarantine is a **state**, not a fourth IP. Marketing never shares the transacti
 
 ## One-click install (Ubuntu 24.04 / Debian 12)
 
-On a fresh VPS with 3 public IPs (rDNS set at the provider):
+On a fresh VPS with 3 public IPs (rDNS set at the provider).
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/imariusalin/mta24x/main/install.sh | sudo bash
-```
-
-Or from a clone (interactive prompts for domain + IPs):
+The repo is **private**, so raw `curl | bash` returns 404. Clone with your GitHub login (or a PAT), then install:
 
 ```bash
 git clone https://github.com/imariusalin/mta24x.git
 cd mta24x
 sudo ./install.sh
+```
+
+SSH instead of HTTPS:
+
+```bash
+git clone git@github.com:imariusalin/mta24x.git
+cd mta24x
+sudo ./install.sh
+```
+
+If you make the repository **public**, this one-liner works:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/imariusalin/mta24x/main/install.sh | sudo bash
 ```
 
 Non-interactive / fleet (one env file per host):
