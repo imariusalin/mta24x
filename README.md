@@ -79,9 +79,9 @@ The script installs Docker, writes `/opt/mta24x/.env` (secrets generated), opens
 
 After install:
 
-- Console: `https://mail.example.com/console` (user `admin`)
+- Console: `https://mail.example.com/console` (user `admin`, password `ADMIN_PASSWORD` in `.env`)
 - Webmail: `https://mail.example.com`
-- Stalwart admin: `http://VPS:8080` — set outbound relay (`deploy/stalwart/RELAY.md`)
+- Stalwart admin: `http://127.0.0.1:8080` on the VPS — set outbound relay (`deploy/stalwart/RELAY.md`)
 - Publish the DNS records the console prints, then `sudo ./install.sh --go-live`
 - Mint an API key in the console
 
@@ -112,7 +112,7 @@ cargo run
 
 Console: http://127.0.0.1:8787/console
 
-`network_mode: host` on the engine is **Linux**. On Docker Desktop, run the engine with `cargo run` instead.
+`network_mode: host` on the engine **and Caddy** is **Linux** (needed so Caddy can reach the engine on `127.0.0.1:8787`; Docker-bridge → host:8787 is a UFW 502). On Docker Desktop, run the engine with `cargo run` instead.
 
 ## CI
 

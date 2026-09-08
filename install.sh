@@ -341,8 +341,13 @@ configure_firewall() {
   for p in 25 80 443 465 587 143 993; do
     ufw allow "${p}/tcp" >/dev/null
   done
+  # Stalwart (bridge) relays through the host-network engine on 2525.
+  # 8787 stays loopback via host-network Caddy; this is belt-and-suspenders
+  # if a container still dials the host IP.
+  ufw allow from 172.16.0.0/12 to any port 2525 proto tcp >/dev/null
+  ufw allow from 172.16.0.0/12 to any port 8787 proto tcp >/dev/null
   ufw --force enable >/dev/null
-  green "firewall: 22,25,80,443,465,587,143,993"
+  green "firewall: 22,25,80,443,465,587,143,993 + docker→8787/2525"
 }
 
 start_stack() {
@@ -376,9 +381,9 @@ print_summary() {
 $(green "MTA installed")
   dir:      $INSTALL_DIR
   domain:   $ROOT_DOMAIN
-  console:  ${API_PUBLIC_URL}/console   (user admin)
+  console:  ${API_PUBLIC_URL}/console   (user admin / ADMIN_PASSWORD in .env)
   webmail:  ${API_PUBLIC_URL}
-  stalwart: http://$(hostname -I | awk '{print $1}'):8080
+  stalwart: http://127.0.0.1:8080  (SSH tunnel; not public)
   dry_run:  $DRY_RUN
 
   IPs: $IPS
