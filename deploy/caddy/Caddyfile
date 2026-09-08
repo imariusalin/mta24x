@@ -1,0 +1,33 @@
+{
+	email {$ACME_EMAIL:admin@localhost}
+}
+
+{$MAIL_HOSTNAME:mail.example.com} {
+	handle /v1/* {
+		reverse_proxy host.docker.internal:8787
+	}
+	handle /console* {
+		reverse_proxy host.docker.internal:8787
+	}
+	handle /u/* {
+		reverse_proxy host.docker.internal:8787
+	}
+	handle /health {
+		reverse_proxy host.docker.internal:8787
+	}
+	handle /.well-known/mta-sts.txt {
+		reverse_proxy host.docker.internal:8787
+	}
+	handle {
+		reverse_proxy webmail:3000
+	}
+}
+
+mta-sts.{$ROOT_DOMAIN:example.com} {
+	handle /.well-known/mta-sts.txt {
+		reverse_proxy host.docker.internal:8787
+	}
+	handle {
+		reverse_proxy host.docker.internal:8787
+	}
+}

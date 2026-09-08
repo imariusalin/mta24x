@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dispatch — outbound MTA</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #0c0d10;
+      --panel: #16181e;
+      --line: #2a2d36;
+      --paper: #e8dcc4;
+      --lime: #c6f547;
+      --amber: #e8a317;
+      --red: #e85d4c;
+      --mute: #8b90a0;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--ink); color: var(--paper); font-family: "IBM Plex Mono", monospace; }
+    body { min-height: 100vh; background-image:
+      radial-gradient(ellipse at top, #1a1c24 0%, transparent 50%),
+      repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,.15) 3px); }
+    header { display: flex; justify-content: space-between; align-items: baseline; padding: 2rem 2.5rem 1rem; border-bottom: 1px solid var(--line); }
+    h1 { font-family: Fraunces, serif; font-weight: 700; font-size: 2.4rem; margin: 0; letter-spacing: -0.03em; }
+    h1 span { color: var(--lime); }
+    .tag { color: var(--mute); font-size: 0.75rem; letter-spacing: 0.18em; text-transform: uppercase; }
+    main { padding: 1.5rem 2.5rem 4rem; display: grid; gap: 1.5rem; }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 2px; padding: 1rem 1.1rem; }
+    .card h2 { font-family: Fraunces, serif; font-size: 1.1rem; margin: 0 0 0.8rem; }
+    .kpi-n { font-family: Fraunces, serif; font-size: 2rem; color: var(--lime); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th { text-align: left; color: var(--mute); font-weight: 500; padding: 0.4rem 0.3rem; border-bottom: 1px solid var(--line); }
+    td { padding: 0.55rem 0.3rem; border-bottom: 1px solid #22242c; vertical-align: top; }
+    .pill { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 99px; font-size: 0.7rem; }
+    .warmup { background: #3a2a0a; color: var(--amber); }
+    .active { background: #1c2a0c; color: var(--lime); }
+    .quarantine { background: #3a1210; color: var(--red); }
+    .queued { color: var(--amber); }
+    .sent { color: var(--lime); }
+    .bounced { color: var(--red); }
+    button, .btn { background: var(--lime); color: #111; border: 0; padding: 0.45rem 0.7rem; font-family: inherit; font-size: 0.75rem; cursor: pointer; }
+    button.ghost { background: transparent; color: var(--paper); border: 1px solid var(--line); }
+    pre { white-space: pre-wrap; word-break: break-all; font-size: 0.72rem; color: #d7c9a8; margin: 0; max-height: 420px; overflow: auto; }
+    .notes { color: var(--mute); font-size: 0.75rem; line-height: 1.5; }
+    .row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+    input { background: #0e1014; color: var(--paper); border: 1px solid var(--line); padding: 0.4rem 0.5rem; font-family: inherit; }
+    .secret { background: #1c2a0c; padding: 0.6rem; margin-top: 0.6rem; color: var(--lime); }
+    a { color: var(--lime); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="tag">company outbound</div>
+      <h1>Dispatch <span>board</span></h1>
+    </div>
+    <div class="tag" id="domain">—</div>
+  </header>
+  <main>
+    <section class="kpis">
+      <div class="card"><div class="tag">in queue</div><div class="kpi-n" id="queued">0</div></div>
+      <div class="card"><div class="tag">sent today</div><div class="kpi-n" id="sent">0</div></div>
+      <div class="card"><div class="tag">mode</div><div class="kpi-n" id="mode" style="font-size:1.4rem">—</div></div>
+    </section>
+    <section class="card">
+      <h2>IP pools</h2>
+      <table>
+        <thead><tr><th>id</th><th>ip / ehlo</th><th>role</th><th>health</th><th>7d sent</th><th>bounce</th><th>block</th><th></th></tr></thead>
+        <tbody id="ips"></tbody>
+      </table>
+    </section>
+    <section class="card">
+      <h2>Recent traffic</h2>
+      <table>
+        <thead><tr><th>when</th><th>to</th><th>stream</th><th>status</th></tr></thead>
+        <tbody id="msgs"></tbody>
+      </table>
+    </section>
+    <section class="card">
+      <h2>DNS + PTR</h2>
+      <p class="notes">Publish these at your DNS host. PTR/rDNS is set at the VPS provider, not in DNS.</p>
+      <pre id="dns"></pre>
+    </section>
+    <section class="card">
+      <h2>API keys</h2>
+      <div class="row">
+        <input id="keyname" placeholder="name, e.g. billing-app">
+        <button onclick="makeKey()">mint key</button>
+      </div>
+      <div id="newkey"></div>
+      <table>
+        <thead><tr><th>name</th><th>prefix</th><th>created</th></tr></thead>
+        <tbody id="keys"></tbody>
+      </table>
+    </section>
+  </main>
+  <script>
+    const auth = {};
+    async function api(path, opts={}) {
+      const res = await fetch(path, { credentials: 'include', headers: { 'content-type': 'application/json', ...(opts.headers||{}) }, ...opts });
+      if (res.status === 401) { document.body.innerHTML = '<p style="padding:3rem">Sign in with HTTP basic: user <b>admin</b>, password from ADMIN_PASSWORD.</p>'; throw new Error('auth'); }
+      return res.json();
+    }
+    function pill(h) { return `<span class="pill ${h}">${h}</span>`; }
+    async function load() {
+      const o = await api('/console/api/overview');
+      document.getElementById('domain').textContent = o.root_domain + ' · ' + o.mail_hostname;
+      document.getElementById('queued').textContent = o.queued;
+      document.getElementById('sent').textContent = o.sent_today;
+      document.getElementById('mode').textContent = o.dry_run ? 'DRY RUN' : 'LIVE';
+      document.getElementById('ips').innerHTML = o.ips.map(ip => `
+        <tr>
+          <td>${ip.id}</td>
+          <td>${ip.address}<br><span class="tag">${ip.hostname}</span></td>
+          <td>${ip.role}</td>
+          <td>${pill(ip.health)}</td>
+          <td>${ip.sent_7d}</td>
+          <td>${ip.bounced_7d}</td>
+          <td>${ip.blocked_7d}</td>
+          <td>
+            <button class="ghost" onclick="setHealth('${ip.id}','warmup')">warmup</button>
+            <button class="ghost" onclick="setHealth('${ip.id}','active')">active</button>
+            <button class="ghost" onclick="setHealth('${ip.id}','quarantine')">quarantine</button>
+          </td>
+        </tr>`).join('');
+      const msgs = await api('/console/api/messages?limit=30');
+      document.getElementById('msgs').innerHTML = msgs.map(m => `
+        <tr><td>${m.created_at}</td><td>${m.recipient}</td><td>${m.stream}</td><td class="${m.status}">${m.status}</td></tr>`).join('');
+      const dns = await api('/console/api/dns');
+      const recs = dns.records.map(r => `${r.host.padEnd(40)} ${r.type.padEnd(6)} ${r.value}\n    ; ${r.purpose}`).join('\n');
+      const ptr = dns.ptr.map(p => `PTR ${p.ip}  →  ${p.hostname}`).join('\n');
+      const notes = dns.notes.map(n => '• ' + n).join('\n');
+      document.getElementById('dns').textContent = recs + '\n\n--- PTR (set at VPS) ---\n' + ptr + '\n\n' + notes;
+      const keys = await api('/console/api/keys');
+      document.getElementById('keys').innerHTML = keys.map(k => `<tr><td>${k.name}</td><td>${k.prefix}…</td><td>${k.created_at}</td></tr>`).join('');
+    }
+    async function setHealth(id, health) {
+      await api('/console/api/ips/' + id + '/health', { method: 'POST', body: JSON.stringify({ health }) });
+      load();
+    }
+    async function makeKey() {
+      const name = document.getElementById('keyname').value || 'app';
+      const k = await api('/console/api/keys', { method: 'POST', body: JSON.stringify({ name }) });
+      document.getElementById('newkey').innerHTML = `<div class="secret">Copy now, it is not shown again:<br>${k.secret}</div>`;
+      load();
+    }
+    load().catch(console.error);
+    setInterval(() => load().catch(()=>{}), 8000);
+  </script>
+</body>
+</html>

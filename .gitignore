@@ -1,0 +1,9 @@
+/target
+/data
+/stalwart-data
+/webmail-data
+.env
+*.pem
+*.key
+.DS_Store
+Thumbs.db
