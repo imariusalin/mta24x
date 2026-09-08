@@ -1,5 +1,7 @@
 # Dispatch — company MTA
 
+[![Rust](https://github.com/imariusalin/mta24x/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/imariusalin/mta24x/actions/workflows/rust.yml)
+
 Single-tenant outbound engine with **IP + domain warming**, isolated pools, DKIM/SPF/DMARC/MTA-STS, a transactional HTTP API, and SMTP intake. **Stalwart** is IMAP/JMAP/inbound. **Bulwark** is webmail.
 
 Designed for **5k–50k mail/day** on a Linux VPS with **3 dedicated IPs**.
@@ -78,6 +80,20 @@ cargo run
 Console: http://127.0.0.1:8787/console
 
 `network_mode: host` on the engine is **Linux**. On Docker Desktop, run the engine with `cargo run` instead.
+
+## CI
+
+GitHub Actions on every push and PR to `main`. The badge at the top is the **last build**.
+
+| Order | Step | Command |
+|---|---|---|
+| 1 | 📦 Checkout | `actions/checkout@v4` |
+| 2 | 🔨 Build | `cargo build --verbose` |
+| 3 | 🧪 Test | `cargo test --verbose` |
+
+✅ green = last build passed · ❌ red = last build failed · 🟡 yellow = running
+
+Workflow: [`.github/workflows/rust.yml`](.github/workflows/rust.yml)
 
 ## DMARC path
 
