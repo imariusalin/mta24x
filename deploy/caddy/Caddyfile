@@ -25,7 +25,9 @@
 			lb_policy first
 			fail_duration 10s
 			max_fails 1
-			dial_timeout 3s
+			transport http {
+				dial_timeout 3s
+			}
 		}
 	}
 }
