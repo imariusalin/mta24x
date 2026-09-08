@@ -64,6 +64,7 @@ services:
     environment:
       MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.example.com}
       ROOT_DOMAIN: ${ROOT_DOMAIN:-example.com}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./data/caddy:/data

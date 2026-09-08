@@ -1,0 +1,3 @@
+# user@host   path-to-env
+# root@203.0.113.10  deploy/nodes/mail1.env
+# root@203.0.113.20  deploy/nodes/mail2.env

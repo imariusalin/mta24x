@@ -17,40 +17,53 @@ Quarantine is a **state**, not a fourth IP. Marketing never shares the transacti
 ## What you get
 
 - Warmup curves per ISP (Gmail, Microsoft, Yahoo, Apple, other)
+- Auto volume: **stop / cut 25% / slow 50% / hold / push +20%** from live bounce, deferral, complaint, block, DNSBL
+- Reputation score 0–100 per IP in the console (Spamhaus, SpamCop, Barracuda, SORBS every 6h)
 - Auto graduate after 14 clean days; auto quarantine on bounce/complaint/block
 - VERP return-path + suppression list
 - One-click `List-Unsubscribe` on marketing
 - DNS wizard + PTR checklist in the console
 - `POST /v1/messages` transactional API
 
-## VPS bootstrap
+## One-click install (Ubuntu 24.04 / Debian 12)
 
-1. Three public IPv4s, rDNS set **at the provider**:
+On a fresh VPS with 3 public IPs (rDNS set at the provider):
 
-   ```
-   IP_TX      PTR  mail.example.com
-   IP_MKT     PTR  news-out.example.com
-   IP_CANARY  PTR  out.example.com
-   ```
+```bash
+curl -fsSL https://raw.githubusercontent.com/imariusalin/mta24x/main/install.sh | sudo bash
+```
 
-2. Copy env and edit:
+Or from a clone (interactive prompts for domain + IPs):
 
-   ```bash
-   cp .env.example .env
-   # set ROOT_DOMAIN, the three IPs, ADMIN_PASSWORD, DRY_RUN=true
-   ```
+```bash
+git clone https://github.com/imariusalin/mta24x.git
+cd mta24x
+sudo ./install.sh
+```
 
-3. `docker compose up -d --build`
+Non-interactive / fleet (one env file per host):
 
-4. Open:
-   - Console: `https://mail.example.com/console` (user `admin`)
-   - Webmail: `https://mail.example.com`
-   - Stalwart admin: `http://VPS:8080`
-   - Follow `deploy/stalwart/RELAY.md` so Stalwart relays outbound to `:2525`
+```bash
+sudo ./install.sh --non-interactive --env deploy/install.env.example
+# many VPS:
+./deploy/rollout.sh deploy/inventory.example
+```
 
-5. Publish the DNS records the console prints. Keep `DRY_RUN=true` until SPF/DKIM/PTR match. Then `DRY_RUN=false` and recreate the engine container.
+Go live after DNS/PTR/DKIM match:
 
-6. Mint an API key in the console.
+```bash
+sudo ./install.sh --go-live
+```
+
+The script installs Docker, writes `/opt/mta24x/.env` (secrets generated), opens ufw ports, and `docker compose up`. Passwords stay in `.env` (mode 600).
+
+After install:
+
+- Console: `https://mail.example.com/console` (user `admin`)
+- Webmail: `https://mail.example.com`
+- Stalwart admin: `http://VPS:8080` — set outbound relay (`deploy/stalwart/RELAY.md`)
+- Publish the DNS records the console prints, then `sudo ./install.sh --go-live`
+- Mint an API key in the console
 
 ```bash
 curl -s https://mail.example.com/v1/messages \
