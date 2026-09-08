@@ -19,7 +19,14 @@
 		reverse_proxy host.docker.internal:8787
 	}
 	handle {
-		reverse_proxy webmail:3000
+		# Prefer webmail; if that container is down, serve the engine so the
+		# hostname is never a blank 502.
+		reverse_proxy webmail:3000 host.docker.internal:8787 {
+			lb_policy first
+			fail_duration 10s
+			max_fails 1
+			dial_timeout 3s
+		}
 	}
 }
 

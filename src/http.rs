@@ -34,6 +34,7 @@ pub struct App {
 pub fn router(app: App) -> Router {
     let static_dir = app.cfg.static_dir.clone();
     Router::new()
+        .route("/", get(landing))
         .route("/health", get(health))
         .route("/v1/messages", post(send_message))
         .route("/v1/messages/{id}", get(get_message))
@@ -52,6 +53,19 @@ pub fn router(app: App) -> Router {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn landing() -> Html<&'static str> {
+    Html(
+        r#"<!doctype html><meta charset=utf-8>
+<title>Dispatch MTA</title>
+<body style="font-family:serif;background:#0c0d10;color:#e8dcc4;padding:3rem;max-width:40rem">
+<h1>Dispatch</h1>
+<p>Outbound engine is up.</p>
+<p><a href="/console" style="color:#c6f547">Open console</a> (user <code>admin</code>)</p>
+<p>If you expected webmail here, that container is down — the hostname fell back to this page instead of a 502.</p>
+</body>"#,
+    )
 }
 
 #[derive(Deserialize)]
