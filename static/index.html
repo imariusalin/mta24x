@@ -38,6 +38,15 @@
     .warmup { background: #3a2a0a; color: var(--amber); }
     .active { background: #1c2a0c; color: var(--lime); }
     .quarantine { background: #3a1210; color: var(--red); }
+    .stop { background: #3a1210; color: var(--red); }
+    .cut { background: #3a2a0a; color: var(--amber); }
+    .slow { background: #3a2a0a; color: var(--amber); }
+    .hold { background: #1c2a0c; color: var(--lime); }
+    .push { background: #1c2a0c; color: var(--lime); }
+    .score { font-family: Fraunces, serif; font-size: 1.3rem; }
+    .score.bad { color: var(--red); }
+    .score.mid { color: var(--amber); }
+    .score.good { color: var(--lime); }
     .queued { color: var(--amber); }
     .sent { color: var(--lime); }
     .bounced { color: var(--red); }
@@ -66,9 +75,10 @@
       <div class="card"><div class="tag">mode</div><div class="kpi-n" id="mode" style="font-size:1.4rem">—</div></div>
     </section>
     <section class="card">
-      <h2>IP pools</h2>
+      <h2>IP pools &amp; reputation</h2>
+      <p class="notes">Score and volume decision update automatically from bounces, deferrals, complaints, blocks, and DNSBL probes (Spamhaus / SpamCop / Barracuda / SORBS every 6h).</p>
       <table>
-        <thead><tr><th>id</th><th>ip / ehlo</th><th>role</th><th>health</th><th>7d sent</th><th>bounce</th><th>block</th><th></th></tr></thead>
+        <thead><tr><th>id</th><th>ip / ehlo</th><th>role</th><th>health</th><th>score</th><th>auto volume</th><th>7d / bounce / defer</th><th>lists</th><th></th></tr></thead>
         <tbody id="ips"></tbody>
       </table>
     </section>
@@ -111,21 +121,26 @@
       document.getElementById('queued').textContent = o.queued;
       document.getElementById('sent').textContent = o.sent_today;
       document.getElementById('mode').textContent = o.dry_run ? 'DRY RUN' : 'LIVE';
-      document.getElementById('ips').innerHTML = o.ips.map(ip => `
+      document.getElementById('ips').innerHTML = o.ips.map(ip => {
+        const sc = ip.score >= 80 ? 'good' : ip.score >= 50 ? 'mid' : 'bad';
+        const isp = (ip.by_isp||[]).map(x => `${x.isp}: ${x.label}`).join('<br>') || '—';
+        return `
         <tr>
           <td>${ip.id}</td>
           <td>${ip.address}<br><span class="tag">${ip.hostname}</span></td>
           <td>${ip.role}</td>
           <td>${pill(ip.health)}</td>
-          <td>${ip.sent_7d}</td>
-          <td>${ip.bounced_7d}</td>
-          <td>${ip.blocked_7d}</td>
+          <td><span class="score ${sc}">${ip.score}</span></td>
+          <td>${pill(ip.decision)} ${ip.decision_label}<br><span class="tag">${isp}</span></td>
+          <td>${ip.sent_7d} sent<br>bounce ${ip.bounce_rate}<br>defer ${ip.defer_rate}</td>
+          <td>${ip.listed_on || (ip.blocked_48h ? 'smtp-block' : 'clean')}</td>
           <td>
             <button class="ghost" onclick="setHealth('${ip.id}','warmup')">warmup</button>
             <button class="ghost" onclick="setHealth('${ip.id}','active')">active</button>
             <button class="ghost" onclick="setHealth('${ip.id}','quarantine')">quarantine</button>
           </td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('');
       const msgs = await api('/console/api/messages?limit=30');
       document.getElementById('msgs').innerHTML = msgs.map(m => `
         <tr><td>${m.created_at}</td><td>${m.recipient}</td><td>${m.stream}</td><td class="${m.status}">${m.status}</td></tr>`).join('');

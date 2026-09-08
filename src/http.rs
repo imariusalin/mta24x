@@ -1,7 +1,9 @@
 use crate::config::Config;
 use crate::db::{health_str, load_ips, parse_health};
 use crate::dns_records::{generate_dns, DkimDns, IpDns};
-use crate::queue::{api_key_ok, create_api_key, enqueue_raw};
+use crate::queue::{api_key_ok, create_api_key, enqueue_raw, load_signals};
+use crate::reputation::{decide_volume, reputation_score};
+use crate::warming::Isp;
 use crate::routing::Stream;
 use crate::warming::{evaluate_health, Reputation};
 use anyhow::Result;
@@ -225,25 +227,81 @@ async fn admin_overview(State(app): State<Arc<App>>, headers: HeaderMap) -> Resp
     };
     let mut ip_json = Vec::new();
     for ip in ips {
-        let stats: (i64, i64, i64, i64) = sqlx::query_as(
-            "SELECT COALESCE(SUM(sent),0), COALESCE(SUM(bounced),0), COALESCE(SUM(complained),0), COALESCE(SUM(blocked),0)
-             FROM send_counters WHERE ip_id=$1 AND bucket > now() - interval '7 days'",
+        let extra: (i32, String, String) = sqlx::query_as(
+            "SELECT reputation_score, volume_decision, listed_on FROM ips WHERE id=$1",
         )
         .bind(&ip.id)
         .fetch_one(&app.pool)
         .await
-        .unwrap_or((0, 0, 0, 0));
+        .unwrap_or((70, "hold".into(), String::new()));
+        let listed = !extra.2.is_empty();
+        let signals = load_signals(&app.pool, &ip.id, None, ip.health, listed)
+            .await
+            .unwrap_or(crate::reputation::Signals {
+                health: ip.health,
+                sent_24h: 0,
+                sent_7d: 0,
+                bounce_24h: 0,
+                bounce_7d: 0,
+                complaint_7d: 0,
+                deferred_24h: 0,
+                blocked_48h: false,
+                dnsbl_listed: listed,
+            });
+        let decision = decide_volume(&signals);
+        let score = reputation_score(&signals);
+        let isps: Vec<(String, i64, i64, i64, i64)> = sqlx::query_as(
+            "SELECT isp, COALESCE(SUM(sent),0), COALESCE(SUM(bounced),0), COALESCE(SUM(deferred),0), COALESCE(SUM(blocked),0)
+             FROM send_counters WHERE ip_id=$1 AND bucket > now() - interval '7 days'
+             GROUP BY isp",
+        )
+        .bind(&ip.id)
+        .fetch_all(&app.pool)
+        .await
+        .unwrap_or_default();
+        let mut by_isp = Vec::new();
+        for (isp_name, sent, bounced, deferred, blocked) in isps {
+            let isp = match isp_name.as_str() {
+                "gmail" => Isp::Gmail,
+                "microsoft" => Isp::Microsoft,
+                "yahoo" => Isp::Yahoo,
+                "apple" => Isp::Apple,
+                _ => Isp::Other,
+            };
+            let sig = load_signals(&app.pool, &ip.id, Some(isp), ip.health, listed)
+                .await
+                .unwrap_or(signals.clone());
+            let d = decide_volume(&sig);
+            by_isp.push(serde_json::json!({
+                "isp": isp_name,
+                "sent_7d": sent,
+                "bounced_7d": bounced,
+                "deferred_7d": deferred,
+                "blocked_7d": blocked,
+                "decision": d.as_str(),
+                "label": d.label(),
+            }));
+        }
         ip_json.push(serde_json::json!({
             "id": ip.id,
             "address": ip.address,
             "hostname": ip.hostname,
             "role": format!("{:?}", ip.role).to_lowercase(),
             "health": health_str(ip.health),
-            "sent_7d": stats.0,
-            "bounced_7d": stats.1,
-            "complained_7d": stats.2,
-            "blocked_7d": stats.3,
+            "score": score,
+            "decision": decision.as_str(),
+            "decision_label": decision.label(),
+            "listed_on": extra.2,
+            "sent_7d": signals.sent_7d,
+            "sent_24h": signals.sent_24h,
+            "bounced_7d": signals.bounce_7d,
+            "bounce_rate": format!("{:.2}%", signals.bounce_rate_7d() * 100.0),
+            "defer_rate": format!("{:.1}%", signals.defer_rate_24h() * 100.0),
+            "complained_7d": signals.complaint_7d,
+            "blocked_48h": signals.blocked_48h,
+            "by_isp": by_isp,
         }));
+        let _ = extra.1;
     }
     let queued: (i64,) = sqlx::query_as("SELECT count(*) FROM messages WHERE status IN ('queued','sending')")
         .fetch_one(&app.pool)

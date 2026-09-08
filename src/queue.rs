@@ -1,6 +1,8 @@
 use crate::bounce::BounceClass;
 use crate::config::Config;
 use crate::db::{health_str, load_ips};
+use crate::dnsbl;
+use crate::reputation::{apply_volume, decide_volume, reputation_score, Signals};
 use crate::routing::{pick_ip, SendingIp, Stream};
 use crate::smtp_out::{deliver, sign_dkim};
 use crate::warming::{
@@ -36,7 +38,7 @@ pub async fn enqueue_raw(
         return Err(anyhow!("recipient is suppressed"));
     }
     let from_domain = domain_of(header_from).ok_or_else(|| anyhow!("From missing domain"))?;
-    let (domain_id, pem, selector, domain_health, domain_age) =
+    let (domain_id, pem, selector, _domain_health, domain_age) =
         load_domain(pool, &from_domain).await?;
     let ips = load_ips(pool).await?;
     let ip = pick_ip(stream, &ips).map_err(|e| anyhow!("{e}"))?;
@@ -44,16 +46,26 @@ pub async fn enqueue_raw(
     let ip_age = ip_age_days(pool, &ip.id).await?;
     let (sent_today_ip, sent_hour_ip) = counters(pool, &ip.id, "", isp).await?;
     let (sent_today_dom, _) = counters(pool, &ip.id, &domain_id, isp).await?;
-    let left = remaining_quota(
-        ip_age,
-        domain_age,
-        ip.health,
-        isp,
-        sent_today_ip,
-        sent_today_dom,
-        sent_hour_ip,
+    let listed = listed_flag(pool, &ip.id).await?;
+    let signals = load_signals(pool, &ip.id, Some(isp), ip.health, listed).await?;
+    let decision = decide_volume(&signals);
+    let left = apply_volume(
+        remaining_quota(
+            ip_age,
+            domain_age,
+            ip.health,
+            isp,
+            sent_today_ip,
+            sent_today_dom,
+            sent_hour_ip,
+        ),
+        decision,
     );
-    let delay = if left == 0 { Duration::minutes(15) } else { Duration::zero() };
+    let delay = if left == 0 {
+        Duration::minutes(15)
+    } else {
+        Duration::zero()
+    };
 
     let signed = sign_dkim(raw, &from_domain, &selector, &pem).unwrap_or_else(|e| {
         warn!(error = %e, "dkim sign failed, queueing unsigned");
@@ -77,7 +89,6 @@ pub async fn enqueue_raw(
     .bind(Utc::now() + delay)
     .execute(pool)
     .await?;
-    let _ = domain_health;
     Ok(id)
 }
 
@@ -259,38 +270,129 @@ pub async fn refresh_health(pool: &PgPool) -> Result<()> {
     let ips = load_ips(pool).await?;
     for ip in ips {
         let age = ip_age_days(pool, &ip.id).await?;
-        let stats: (i64, i64, i64, i64) = sqlx::query_as(
-            "SELECT COALESCE(SUM(sent),0), COALESCE(SUM(bounced),0), COALESCE(SUM(complained),0), COALESCE(SUM(blocked),0)
-             FROM send_counters WHERE ip_id=$1 AND bucket > now() - interval '7 days'",
-        )
-        .bind(&ip.id)
-        .fetch_one(pool)
-        .await?;
-        let blocked_48: (i64,) = sqlx::query_as(
-            "SELECT COALESCE(SUM(blocked),0) FROM send_counters WHERE ip_id=$1 AND bucket > now() - interval '48 hours'",
-        )
-        .bind(&ip.id)
-        .fetch_one(pool)
-        .await?;
+        let due = probe_due(pool, &ip.id).await?;
+        let mut listed = listed_flag(pool, &ip.id).await?;
+        let mut listed_on = String::new();
+        if due {
+            match dnsbl::listed_on(&ip.address).await {
+                Ok(hits) => {
+                    listed = !hits.is_empty();
+                    listed_on = hits.join(",");
+                }
+                Err(e) => warn!(ip = %ip.id, error = %e, "dnsbl probe failed"),
+            }
+        }
+        let signals = load_signals(pool, &ip.id, None, ip.health, listed).await?;
+        let decision = decide_volume(&signals);
+        let score = reputation_score(&signals);
         let next = evaluate_health(&Reputation {
             age_days: age,
-            sent_7d: stats.0 as u32,
-            hard_bounce_7d: stats.1 as u32,
-            complaint_7d: stats.2 as u32,
-            blocked_48h: blocked_48.0 > 0,
+            sent_7d: signals.sent_7d,
+            hard_bounce_7d: signals.bounce_7d,
+            complaint_7d: signals.complaint_7d,
+            blocked_48h: signals.blocked_48h,
             current: ip.health,
         });
         if next != ip.health {
             info!(ip = %ip.id, from = ?ip.health, to = ?next, "health change");
-            sqlx::query("UPDATE ips SET health=$2, graduated_at = CASE WHEN $2='active' THEN now() ELSE graduated_at END WHERE id=$1")
-                .bind(&ip.id)
-                .bind(health_str(next))
-                .execute(pool)
-                .await?;
+        }
+        if due {
+            sqlx::query(
+                "UPDATE ips SET health=$2, reputation_score=$3, volume_decision=$4, listed_on=$5, last_probe_at=now(),
+                 graduated_at = CASE WHEN $2='active' THEN COALESCE(graduated_at, now()) ELSE graduated_at END
+                 WHERE id=$1",
+            )
+            .bind(&ip.id)
+            .bind(health_str(next))
+            .bind(score as i32)
+            .bind(decision.as_str())
+            .bind(&listed_on)
+            .execute(pool)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE ips SET health=$2, reputation_score=$3, volume_decision=$4,
+                 graduated_at = CASE WHEN $2='active' THEN COALESCE(graduated_at, now()) ELSE graduated_at END
+                 WHERE id=$1",
+            )
+            .bind(&ip.id)
+            .bind(health_str(next))
+            .bind(score as i32)
+            .bind(decision.as_str())
+            .execute(pool)
+            .await?;
         }
         let _ = Role::Canary;
     }
     Ok(())
+}
+
+async fn listed_flag(pool: &PgPool, ip_id: &str) -> Result<bool> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT listed_on FROM ips WHERE id=$1")
+        .bind(ip_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|(s,)| !s.is_empty()).unwrap_or(false))
+}
+
+async fn probe_due(pool: &PgPool, ip_id: &str) -> Result<bool> {
+    let row: Option<(Option<chrono::DateTime<Utc>>,)> =
+        sqlx::query_as("SELECT last_probe_at FROM ips WHERE id=$1")
+            .bind(ip_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(match row {
+        Some((Some(at),)) => Utc::now() - at > Duration::hours(6),
+        _ => true,
+    })
+}
+
+pub async fn load_signals(
+    pool: &PgPool,
+    ip_id: &str,
+    isp: Option<Isp>,
+    health: Health,
+    dnsbl_listed: bool,
+) -> Result<Signals> {
+    let isp_s = isp.map(|i| format!("{i:?}").to_lowercase());
+    let week: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(sent),0), COALESCE(SUM(bounced),0), COALESCE(SUM(complained),0), COALESCE(SUM(blocked),0)
+         FROM send_counters
+         WHERE ip_id=$1 AND bucket > now() - interval '7 days'
+           AND ($2::text IS NULL OR isp=$2)",
+    )
+    .bind(ip_id)
+    .bind(&isp_s)
+    .fetch_one(pool)
+    .await?;
+    let day: (i64, i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(sent),0), COALESCE(SUM(bounced),0), COALESCE(SUM(deferred),0)
+         FROM send_counters
+         WHERE ip_id=$1 AND bucket > now() - interval '24 hours'
+           AND ($2::text IS NULL OR isp=$2)",
+    )
+    .bind(ip_id)
+    .bind(&isp_s)
+    .fetch_one(pool)
+    .await?;
+    let blocked_48: (i64,) = sqlx::query_as(
+        "SELECT COALESCE(SUM(blocked),0) FROM send_counters
+         WHERE ip_id=$1 AND bucket > now() - interval '48 hours'",
+    )
+    .bind(ip_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(Signals {
+        health,
+        sent_24h: day.0 as u32,
+        sent_7d: week.0 as u32,
+        bounce_24h: day.1 as u32,
+        bounce_7d: week.1 as u32,
+        complaint_7d: week.2 as u32,
+        deferred_24h: day.2 as u32,
+        blocked_48h: blocked_48.0 > 0,
+        dnsbl_listed,
+    })
 }
 
 pub async fn record_verp_bounce(pool: &PgPool, id: Uuid, raw: &[u8]) -> Result<()> {

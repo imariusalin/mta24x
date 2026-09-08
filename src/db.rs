@@ -7,7 +7,10 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tracing::info;
 
-const SCHEMA: &str = include_str!("../sql/001_init.sql");
+const MIGRATIONS: &[&str] = &[
+    include_str!("../sql/001_init.sql"),
+    include_str!("../sql/002_reputation.sql"),
+];
 
 pub async fn connect(cfg: &Config) -> Result<PgPool> {
     let pool = PgPoolOptions::new()
@@ -21,12 +24,17 @@ pub async fn connect(cfg: &Config) -> Result<PgPool> {
 }
 
 async fn migrate(pool: &PgPool) -> Result<()> {
-    for stmt in SCHEMA.split(';') {
-        let stmt = stmt.trim();
-        if stmt.is_empty() {
-            continue;
+    for schema in MIGRATIONS {
+        for stmt in schema.split(';') {
+            let stmt = stmt.trim();
+            if stmt.is_empty() {
+                continue;
+            }
+            sqlx::query(stmt)
+                .execute(pool)
+                .await
+                .with_context(|| stmt.to_string())?;
         }
-        sqlx::query(stmt).execute(pool).await.with_context(|| stmt.to_string())?;
     }
     Ok(())
 }
