@@ -111,7 +111,10 @@ pub fn generate_dns(
         records.push(DnsRecord {
             host: format!("{}._domainkey.{}", key.selector, key.domain),
             r#type: "TXT",
-            value: format!("v=DKIM1; k=rsa; p={}", key.public_b64),
+            value: format!(
+                "v=DKIM1; k=rsa; p={}",
+                crate::dkim_keys::to_spki_dns_p(&key.public_b64)
+            ),
             purpose: format!("DKIM for {}", key.domain),
         });
     }

@@ -105,15 +105,25 @@ async fn send_message(
     if body.to.is_empty() {
         return err(StatusCode::BAD_REQUEST, "to is required");
     }
+    let (from_name, from_email) = split_mailbox(&body.from);
     let from_addr = extract_email(&body.from);
+    let from_domain = from_addr
+        .rsplit_once('@')
+        .map(|(_, d)| d.to_string())
+        .unwrap_or_else(|| app.cfg.root_domain.clone());
     let mut ids = Vec::new();
     for to in &body.to {
         let unsub = unsub_url(&app.cfg, to);
-        let mut builder = MessageBuilder::new()
-            .from(body.from.as_str())
+        let msgid = format!("{}@{}", Uuid::new_v4(), from_domain);
+        let mut builder = MessageBuilder::new();
+        builder = match from_name.as_deref() {
+            Some(name) => builder.from((name, from_email.as_str())),
+            None => builder.from(from_email.as_str()),
+        };
+        builder = builder
             .to(to.as_str())
             .subject(body.subject.as_str())
-            .message_id(format!("<{}@{}>", Uuid::new_v4(), app.cfg.root_domain));
+            .message_id(msgid);
         if let Some(t) = &body.text {
             builder = builder.text_body(t.as_str());
         }
@@ -573,11 +583,25 @@ fn err(status: StatusCode, msg: &str) -> Response {
 }
 
 fn extract_email(from: &str) -> String {
-    if let (Some(a), Some(b)) = (from.find('<'), from.find('>')) {
-        from[a + 1..b].trim().to_ascii_lowercase()
-    } else {
-        from.trim().to_ascii_lowercase()
+    split_mailbox(from).1.to_ascii_lowercase()
+}
+
+/// Display name + addr-spec. `.from("Name <a@b>")` would emit `From: <Name <a@b>>`.
+fn split_mailbox(from: &str) -> (Option<String>, String) {
+    let s = from.trim();
+    if let (Some(lt), Some(gt)) = (s.find('<'), s.rfind('>')) {
+        if lt < gt {
+            let email = s[lt + 1..gt].trim().to_string();
+            let name = s[..lt].trim().trim_matches('"').trim();
+            let name = if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            };
+            return (name, email);
+        }
     }
+    (None, s.to_string())
 }
 
 fn unsub_url(cfg: &Config, email: &str) -> String {
@@ -615,4 +639,36 @@ fn _redirect() -> Redirect {
 #[allow(dead_code)]
 fn _body() -> Body {
     Body::empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_display_name_and_addr() {
+        let (name, email) = split_mailbox("Dispatch <billing@notify.example.com>");
+        assert_eq!(name.as_deref(), Some("Dispatch"));
+        assert_eq!(email, "billing@notify.example.com");
+    }
+
+    #[test]
+    fn from_header_is_not_double_wrapped() {
+        let raw = MessageBuilder::new()
+            .from(("Dispatch", "billing@notify.example.com"))
+            .to("you@gmail.com")
+            .subject("t")
+            .message_id("abc@notify.example.com")
+            .text_body("x")
+            .write_to_vec()
+            .unwrap();
+        let s = String::from_utf8_lossy(&raw);
+        assert!(
+            s.contains("billing@notify.example.com") && s.contains("Dispatch"),
+            "from header: {s}"
+        );
+        assert!(!s.contains("<Dispatch <"), "double-wrapped From: {s}");
+        assert!(s.contains("abc@notify.example.com"), "message-id: {s}");
+        assert!(!s.contains("<<abc@"), "double-wrapped Message-ID: {s}");
+    }
 }
