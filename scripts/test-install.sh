@@ -13,4 +13,11 @@ valid_ipv4 "not-an-ip" && { echo "valid_ipv4 accepted text"; exit 1; }
 s="$(rand_secret)"
 [[ ${#s} -ge 16 ]] || { echo "rand_secret too short"; exit 1; }
 
+is_public_v4 "203.0.113.10" || { echo "public IP rejected"; exit 1; }
+is_public_v4 "10.0.0.1" && { echo "private 10/8 accepted"; exit 1; }
+is_public_v4 "192.168.1.1" && { echo "private 192.168 accepted"; exit 1; }
+is_public_v4 "172.16.0.1" && { echo "private 172.16 accepted"; exit 1; }
+
+[[ "$(join_pools "1.1.1.1" "" "2.2.2.2")" == "1.1.1.1,2.2.2.2" ]] || { echo "join_pools failed"; exit 1; }
+
 echo "install helper tests ok"

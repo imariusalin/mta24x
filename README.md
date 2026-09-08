@@ -4,15 +4,16 @@
 
 Single-tenant outbound engine with **IP + domain warming**, isolated pools, DKIM/SPF/DMARC/MTA-STS, a transactional HTTP API, and SMTP intake. **Stalwart** is IMAP/JMAP/inbound. **Bulwark** is webmail.
 
-Designed for **5k–50k mail/day** on a Linux VPS with **3 dedicated IPs**.
+Designed for **5k–50k mail/day** on a Linux VPS with **any number of dedicated IPs** (1, 3, or 200+). The installer detects host IPv4s and the engine splits them into pools.
 
-| IP | Role | From domains |
-|---|---|---|
-| `IP_TX` | transactional + people | `notify.example.com`, mailbox users |
-| `IP_MKT` | marketing only | `news.example.com` |
-| `IP_CANARY` | overflow / new domains | tests, future streams |
+| Host IPs | Split |
+|---|---|
+| 1 | Shared (transactional + marketing + mailbox) |
+| 2 | 1 transactional, 1 marketing |
+| 3 | 1 transactional, 1 marketing, 1 canary |
+| 4+ | ~20% transactional, ~10% canary, rest marketing |
 
-Quarantine is a **state**, not a fourth IP. Marketing never shares the transactional IP.
+Quarantine is a **state**. Marketing never shares a transactional IP when another pool exists. Extra IPs in a pool are load-balanced (least sent today).
 
 ## What you get
 
@@ -27,7 +28,7 @@ Quarantine is a **state**, not a fourth IP. Marketing never shares the transacti
 
 ## One-click install (Ubuntu 24.04 / Debian 12)
 
-On a fresh VPS with 3 public IPs (rDNS set at the provider).
+On a fresh VPS (any number of public IPs; rDNS set at the provider).
 
 The repo is **private**, so raw `curl | bash` returns 404. Clone with your GitHub login (or a PAT), then install:
 
@@ -45,7 +46,7 @@ cd mta24x
 sudo ./install.sh
 ```
 
-If you make the repository **public**, this one-liner works (it will still **ask** for domain and 3 IPs on the terminal):
+If you make the repository **public**, this one-liner works (it detects IPs; it still asks for the domain unless you pass env vars):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/imariusalin/mta24x/main/install.sh | sudo bash
@@ -57,11 +58,14 @@ If that clone already finished (Docker installed, then stopped), resume:
 cd /opt/mta24x && sudo git pull && sudo ./install.sh
 ```
 
-Non-interactive / fleet (one env file per host):
+Unattended (detects every public IPv4 on the box):
 
 ```bash
+# only ROOT_DOMAIN is required
+sudo ROOT_DOMAIN=example.com ACME_EMAIL=you@example.com ./install.sh --non-interactive
+# or:
 sudo ./install.sh --non-interactive --env deploy/install.env.example
-# many VPS:
+# fleet:
 ./deploy/rollout.sh deploy/inventory.example
 ```
 

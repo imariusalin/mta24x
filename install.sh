@@ -39,8 +39,13 @@ Usage: install.sh [options]
   --go-live             Set DRY_RUN=false after a healthy start
   -h, --help            Show this help
 
-Fleet (non-interactive) minimum env:
-  ROOT_DOMAIN  IP_TX  IP_MKT  IP_CANARY  ACME_EMAIL
+Unattended minimum env:
+  ROOT_DOMAIN
+Optional:
+  ACME_EMAIL          (default admin@ROOT_DOMAIN)
+  AUTO_DETECT_IPS     (default true — uses every public IPv4 on the host)
+  IPS=1.2.3.4,5.6.7.8 (skip detection, pin the list)
+  POOL_TX / POOL_MKT / POOL_CANARY  (explicit pool membership)
 Passwords are generated if omitted.
 EOF
 }
@@ -128,6 +133,48 @@ ip_on_host() {
   ip -4 -o addr show | awk '{print $4}' | cut -d/ -f1 | grep -qx "$1"
 }
 
+is_public_v4() {
+  local ip="$1"
+  [[ "$ip" =~ ^10\. ]] && return 1
+  [[ "$ip" =~ ^127\. ]] && return 1
+  [[ "$ip" =~ ^169\.254\. ]] && return 1
+  [[ "$ip" =~ ^192\.168\. ]] && return 1
+  [[ "$ip" =~ ^172\.(1[6-9]|2[0-9]|3[01])\. ]] && return 1
+  return 0
+}
+
+# All global IPv4s except docker/bridge/veth. Prefer public; fall back to private.
+detect_ips() {
+  local iface ip cidr all="" pub=""
+  while read -r iface cidr; do
+    [[ "$iface" =~ ^(lo|docker|br-|veth|cni|flannel|virbr|tun|wg) ]] && continue
+    ip="${cidr%%/*}"
+    valid_ipv4 "$ip" || continue
+    all="${all:+$all,}$ip"
+    if is_public_v4 "$ip"; then
+      pub="${pub:+$pub,}$ip"
+    fi
+  done < <(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2, $4}')
+  if [[ -n "$pub" ]]; then
+    printf '%s\n' "$pub"
+  else
+    printf '%s\n' "$all"
+  fi
+}
+
+join_pools() {
+  local out="" part
+  for part in "$@"; do
+    [[ -z "$part" ]] && continue
+    if [[ -n "$out" ]]; then
+      out="$out,$part"
+    else
+      out="$part"
+    fi
+  done
+  printf '%s\n' "$out"
+}
+
 ensure_repo() {
   if [[ -f docker-compose.yml && -f Dockerfile ]]; then
     INSTALL_DIR="$(pwd)"
@@ -195,46 +242,72 @@ write_env() {
   fi
 
   ROOT_DOMAIN="${ROOT_DOMAIN:-}"
-  IP_TX="${IP_TX:-}"
-  IP_MKT="${IP_MKT:-}"
-  IP_CANARY="${IP_CANARY:-}"
   ACME_EMAIL="${ACME_EMAIL:-}"
   DRY_RUN="${DRY_RUN:-true}"
+  AUTO_DETECT_IPS="${AUTO_DETECT_IPS:-true}"
+  IPS="${IPS:-}"
+  POOL_TX="${POOL_TX:-}"
+  POOL_MKT="${POOL_MKT:-}"
+  POOL_CANARY="${POOL_CANARY:-}"
 
-  yellow "Enter domain and the 3 public IPs for this VPS."
   prompt ROOT_DOMAIN "Root domain (example.com)"
-  prompt IP_TX "Transactional IP"
-  prompt IP_MKT "Marketing IP"
-  prompt IP_CANARY "Canary IP"
-  prompt ACME_EMAIL "Let's Encrypt email"
-  if [[ "$NONINTERACTIVE" -eq 0 ]]; then
+  if [[ "$NONINTERACTIVE" -eq 1 ]]; then
+    ACME_EMAIL="${ACME_EMAIL:-admin@${ROOT_DOMAIN}}"
+  else
+    prompt ACME_EMAIL "Let's Encrypt email" "admin@${ROOT_DOMAIN}"
     prompt DRY_RUN "Keep DRY_RUN until DNS/PTR are live? (true/false)" "true"
   fi
 
-  valid_ipv4 "$IP_TX" || die "IP_TX is not an IPv4: $IP_TX"
-  valid_ipv4 "$IP_MKT" || die "IP_MKT is not an IPv4: $IP_MKT"
-  valid_ipv4 "$IP_CANARY" || die "IP_CANARY is not an IPv4: $IP_CANARY"
-  [[ "$IP_TX" != "$IP_MKT" && "$IP_TX" != "$IP_CANARY" && "$IP_MKT" != "$IP_CANARY" ]] \
-    || die "the three IPs must be distinct"
-
-  for ip in "$IP_TX" "$IP_MKT" "$IP_CANARY"; do
-    if ! ip_on_host "$ip"; then
-      yellow "warning: $ip is not assigned to this host yet (PTR/NIC). Continuing."
+  local pooled
+  pooled="$(join_pools "$POOL_TX" "$POOL_MKT" "$POOL_CANARY")"
+  if [[ -n "$pooled" ]]; then
+    IPS="$pooled"
+    AUTO_DETECT_IPS=false
+  elif [[ -z "$IPS" && "${AUTO_DETECT_IPS,,}" != "false" ]]; then
+    IPS="$(detect_ips)"
+    yellow "detected IPs: ${IPS:-<none>}"
+    if [[ "$NONINTERACTIVE" -eq 0 ]]; then
+      prompt IPS "Sending IPs (comma-separated)" "$IPS"
     fi
+  elif [[ -z "$IPS" && "$NONINTERACTIVE" -eq 0 ]]; then
+    prompt IPS "Sending IPs (comma-separated)"
+  fi
+
+  [[ -n "$IPS" ]] || die "no sending IPs (set IPS= or AUTO_DETECT_IPS=true on a host with IPv4)"
+
+  local ip n=0
+  local IFS=,
+  # shellcheck disable=SC2086
+  set -- $IPS
+  unset IFS
+  for ip in "$@"; do
+    ip="${ip// /}"
+    [[ -z "$ip" ]] && continue
+    valid_ipv4 "$ip" || die "not an IPv4: $ip"
+    if ! ip_on_host "$ip"; then
+      yellow "warning: $ip is not assigned to this host yet"
+    fi
+    n=$((n + 1))
   done
+  [[ "$n" -ge 1 ]] || die "need at least one sending IP"
+  green "using $n sending IP(s)"
 
   MAIL_HOSTNAME="${MAIL_HOSTNAME:-mail.${ROOT_DOMAIN}}"
   API_PUBLIC_URL="${API_PUBLIC_URL:-https://${MAIL_HOSTNAME}}"
-  IP_TX_EHLO="${IP_TX_EHLO:-$MAIL_HOSTNAME}"
-  IP_MKT_EHLO="${IP_MKT_EHLO:-news-out.${ROOT_DOMAIN}}"
-  IP_CANARY_EHLO="${IP_CANARY_EHLO:-out.${ROOT_DOMAIN}}"
   ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(rand_secret)}"
   STALWART_ADMIN_PASSWORD="${STALWART_ADMIN_PASSWORD:-$(rand_secret)}"
   SESSION_SECRET="${SESSION_SECRET:-$(rand_secret)}"
   POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(rand_secret)}"
   HTTP_BIND="${HTTP_BIND:-0.0.0.0:8787}"
   SMTP_IN_BIND="${SMTP_IN_BIND:-0.0.0.0:2525}"
-  WORKER_CONCURRENCY="${WORKER_CONCURRENCY:-16}"
+  if [[ -z "${WORKER_CONCURRENCY:-}" ]]; then
+    if [[ "$n" -lt 8 ]]; then
+      WORKER_CONCURRENCY=16
+    else
+      WORKER_CONCURRENCY=$((n * 2))
+      [[ "$WORKER_CONCURRENCY" -gt 256 ]] && WORKER_CONCURRENCY=256
+    fi
+  fi
 
   umask 077
   cat > "$dest" <<EOF
@@ -246,12 +319,11 @@ ACME_EMAIL=${ACME_EMAIL}
 SESSION_SECRET=${SESSION_SECRET}
 STALWART_ADMIN_PASSWORD=${STALWART_ADMIN_PASSWORD}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-IP_TX=${IP_TX}
-IP_TX_EHLO=${IP_TX_EHLO}
-IP_MKT=${IP_MKT}
-IP_MKT_EHLO=${IP_MKT_EHLO}
-IP_CANARY=${IP_CANARY}
-IP_CANARY_EHLO=${IP_CANARY_EHLO}
+AUTO_DETECT_IPS=${AUTO_DETECT_IPS}
+IPS=${IPS}
+POOL_TX=${POOL_TX}
+POOL_MKT=${POOL_MKT}
+POOL_CANARY=${POOL_CANARY}
 HTTP_BIND=${HTTP_BIND}
 SMTP_IN_BIND=${SMTP_IN_BIND}
 WORKER_CONCURRENCY=${WORKER_CONCURRENCY}
@@ -309,10 +381,9 @@ $(green "MTA installed")
   stalwart: http://$(hostname -I | awk '{print $1}'):8080
   dry_run:  $DRY_RUN
 
-  PTR at the VPS provider (required):
-    $IP_TX      →  $IP_TX_EHLO
-    $IP_MKT     →  $IP_MKT_EHLO
-    $IP_CANARY  →  $IP_CANARY_EHLO
+  IPs: $IPS
+  PTR at the VPS provider: each IP must reverse-DNS to its EHLO
+  (see the console DNS wizard).
 
   Next:
     1. Open the console and publish the DNS wizard records

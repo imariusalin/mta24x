@@ -3,7 +3,8 @@ use crate::config::Config;
 use crate::db::{health_str, load_ips};
 use crate::dnsbl;
 use crate::reputation::{apply_volume, decide_volume, reputation_score, Signals};
-use crate::routing::{pick_ip, SendingIp, Stream};
+use crate::routing::{candidates, pick_ip, SendingIp, Stream};
+use std::collections::HashMap;
 use crate::smtp_out::{deliver, sign_dkim};
 use crate::warming::{
     classify_isp, evaluate_health, remaining_quota, retry_delay_secs, Health, Isp, Reputation, Role,
@@ -41,7 +42,11 @@ pub async fn enqueue_raw(
     let (domain_id, pem, selector, _domain_health, domain_age) =
         load_domain(pool, &from_domain).await?;
     let ips = load_ips(pool).await?;
-    let ip = pick_ip(stream, &ips).map_err(|e| anyhow!("{e}"))?;
+    let usage = sent_today_by_ip(pool).await?;
+    let ip = candidates(stream, &ips)
+        .into_iter()
+        .min_by_key(|c| usage.get(&c.id).copied().unwrap_or(0))
+        .ok_or_else(|| anyhow!("no healthy IP available for this stream"))?;
     let isp = classify_isp(domain_of(&recipient).as_deref().unwrap_or(""));
     let ip_age = ip_age_days(pool, &ip.id).await?;
     let (sent_today_ip, sent_hour_ip) = counters(pool, &ip.id, "", isp).await?;
@@ -475,6 +480,20 @@ async fn ip_age_days(pool: &PgPool, id: &str) -> Result<u32> {
             .fetch_one(pool)
             .await?;
     Ok((Utc::now() - created.0).num_days().max(0) as u32)
+}
+
+async fn sent_today_by_ip(pool: &PgPool) -> Result<HashMap<String, u32>> {
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT ip_id, COALESCE(SUM(sent),0) FROM send_counters
+         WHERE bucket::date = CURRENT_DATE
+         GROUP BY ip_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, n)| (id, n as u32))
+        .collect())
 }
 
 async fn counters(pool: &PgPool, ip_id: &str, domain_id: &str, isp: Isp) -> Result<(u32, u32)> {

@@ -7,6 +7,7 @@ pub mod dkim_keys;
 pub mod dnsbl;
 pub mod dns_records;
 pub mod http;
+pub mod pools;
 pub mod queue;
 pub mod reputation;
 pub mod routing;

@@ -68,29 +68,48 @@ impl std::fmt::Display for RouteError {
     }
 }
 
-/// Pick an IP for a stream. Marketing never rides a transactional IP.
-/// If the dedicated pool is quarantined, fall back to canary only.
-pub fn pick_ip(stream: Stream, ips: &[SendingIp]) -> Result<&SendingIp, RouteError> {
+/// Candidates for a stream, preferred pool first.
+/// Marketing never uses a transactional IP when any marketing/canary IP exists.
+/// A single-IP host (only transactional) shares that IP with every stream.
+pub fn candidates(stream: Stream, ips: &[SendingIp]) -> Vec<&SendingIp> {
     let role = stream.preferred_role();
-    if let Some(ip) = best(ips, role) {
-        return Ok(ip);
+    let mut out = by_role(ips, role);
+    if out.is_empty() && role != Role::Canary {
+        out = by_role(ips, Role::Canary);
     }
-    if role != Role::Canary {
-        if let Some(ip) = best(ips, Role::Canary) {
-            return Ok(ip);
+    if out.is_empty() && role == Role::Marketing {
+        let isolated = ips
+            .iter()
+            .any(|i| i.role == Role::Marketing || i.role == Role::Canary);
+        if !isolated {
+            out = by_role(ips, Role::Transactional);
         }
     }
-    Err(RouteError::NoHealthyIp)
+    if out.is_empty() && role == Role::Transactional {
+        out = ips
+            .iter()
+            .filter(|ip| ip.health != Health::Quarantine)
+            .collect();
+    }
+    out.sort_by_key(|ip| match ip.health {
+        Health::Active => 0,
+        Health::Warmup => 1,
+        Health::Quarantine => 2,
+    });
+    out
 }
 
-fn best(ips: &[SendingIp], role: Role) -> Option<&SendingIp> {
+pub fn pick_ip(stream: Stream, ips: &[SendingIp]) -> Result<&SendingIp, RouteError> {
+    candidates(stream, ips)
+        .into_iter()
+        .next()
+        .ok_or(RouteError::NoHealthyIp)
+}
+
+fn by_role(ips: &[SendingIp], role: Role) -> Vec<&SendingIp> {
     ips.iter()
         .filter(|ip| ip.role == role && ip.health != Health::Quarantine)
-        .min_by_key(|ip| match ip.health {
-            Health::Active => 0,
-            Health::Warmup => 1,
-            Health::Quarantine => 2,
-        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -149,6 +168,14 @@ mod tests {
         ];
         let chosen = pick_ip(Stream::Transactional, &ips).unwrap();
         assert_eq!(chosen.id, "3");
+    }
+
+    #[test]
+    fn single_ip_is_shared() {
+        let ips = vec![ip("only", Role::Transactional, Health::Warmup)];
+        assert_eq!(pick_ip(Stream::Transactional, &ips).unwrap().id, "only");
+        assert_eq!(pick_ip(Stream::Marketing, &ips).unwrap().id, "only");
+        assert_eq!(pick_ip(Stream::Mailbox, &ips).unwrap().id, "only");
     }
 
     #[test]

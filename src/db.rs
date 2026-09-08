@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::dkim_keys::generate_rsa_2048;
+use crate::pools::{ip_id, role_str as pool_role};
 use crate::routing::SendingIp;
 use crate::warming::{Health, Role};
 use anyhow::{Context, Result};
@@ -40,16 +41,18 @@ async fn migrate(pool: &PgPool) -> Result<()> {
 }
 
 async fn seed(cfg: &Config, pool: &PgPool) -> Result<()> {
-    seed_ip(pool, "tx", &cfg.ip_tx.address.to_string(), &cfg.ip_tx.hostname, "transactional").await?;
-    seed_ip(pool, "mkt", &cfg.ip_mkt.address.to_string(), &cfg.ip_mkt.hostname, "marketing").await?;
-    seed_ip(
-        pool,
-        "canary",
-        &cfg.ip_canary.address.to_string(),
-        &cfg.ip_canary.hostname,
-        "canary",
-    )
-    .await?;
+    anyhow::ensure!(!cfg.ips.is_empty(), "no sending IPs configured");
+    for ip in &cfg.ips {
+        seed_ip(
+            pool,
+            &ip_id(&ip.address),
+            &ip.address.to_string(),
+            &ip.hostname,
+            pool_role(ip.role),
+        )
+        .await?;
+    }
+    info!(count = cfg.ips.len(), "seeded sending IPs");
 
     seed_domain(pool, &format!("notify.{}", cfg.root_domain), "transactional").await?;
     seed_domain(pool, &format!("news.{}", cfg.root_domain), "marketing").await?;
@@ -58,17 +61,26 @@ async fn seed(cfg: &Config, pool: &PgPool) -> Result<()> {
 }
 
 async fn seed_ip(pool: &PgPool, id: &str, address: &str, hostname: &str, role: &str) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO ips (id, address, hostname, role, health)
-         VALUES ($1,$2,$3,$4,'warmup')
-         ON CONFLICT (id) DO UPDATE SET address = EXCLUDED.address, hostname = EXCLUDED.hostname",
-    )
-    .bind(id)
-    .bind(address)
-    .bind(hostname)
-    .bind(role)
-    .execute(pool)
-    .await?;
+    let updated = sqlx::query("UPDATE ips SET hostname = $2, role = $3 WHERE address = $1")
+        .bind(address)
+        .bind(hostname)
+        .bind(role)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if updated == 0 {
+        sqlx::query(
+            "INSERT INTO ips (id, address, hostname, role, health)
+             VALUES ($1,$2,$3,$4,'warmup')
+             ON CONFLICT (id) DO UPDATE SET address = EXCLUDED.address, hostname = EXCLUDED.hostname, role = EXCLUDED.role",
+        )
+        .bind(id)
+        .bind(address)
+        .bind(hostname)
+        .bind(role)
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }
 
