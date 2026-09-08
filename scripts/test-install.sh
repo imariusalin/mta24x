@@ -43,17 +43,11 @@ grep -q 'engine-proxy:' docker-compose.yml \
   || { echo "engine-proxy sidecar is required"; exit 1; }
 grep -q 'alpine/socat' docker-compose.yml \
   || { echo "engine-proxy must use socat"; exit 1; }
-# dial_timeout is transport http, not a reverse_proxy subdirective.
-# A bare one makes caddy:2-alpine refuse to start.
-awk '
-  /reverse_proxy/ { in_rp=1; in_tr=0 }
-  in_rp && /transport[[:space:]]+http/ { in_tr=1 }
-  in_rp && in_tr && /^[[:space:]]*}/ { in_tr=0 }
-  in_rp && !in_tr && /^[[:space:]]*}/ { in_rp=0 }
-  in_rp && !in_tr && /dial_timeout/ {
-    print "dial_timeout must be nested under transport http"
-    exit 1
-  }
-' deploy/caddy/Caddyfile
+# caddy:2-alpine rejects dial_timeout as a reverse_proxy subdirective
+# and also fails to parse a nested transport block in this handle.
+grep -q 'dial_timeout' deploy/caddy/Caddyfile \
+  && { echo "Caddyfile must not contain dial_timeout"; exit 1; }
+grep -q 'transport http' deploy/caddy/Caddyfile \
+  && { echo "Caddyfile must not use transport http in reverse_proxy"; exit 1; }
 
 echo "install helper tests ok"

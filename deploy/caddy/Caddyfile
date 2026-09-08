@@ -19,16 +19,7 @@
 		reverse_proxy unix//sock/http.sock
 	}
 	handle {
-		# Prefer webmail; if that container is down, serve the engine so the
-		# hostname is never a blank 502.
-		reverse_proxy webmail:3000 unix//sock/http.sock {
-			lb_policy first
-			fail_duration 10s
-			max_fails 1
-			transport http {
-				dial_timeout 3s
-			}
-		}
+		reverse_proxy webmail:3000
 	}
 }
 
