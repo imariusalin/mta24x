@@ -45,10 +45,16 @@ cd mta24x
 sudo ./install.sh
 ```
 
-If you make the repository **public**, this one-liner works:
+If you make the repository **public**, this one-liner works (it will still **ask** for domain and 3 IPs on the terminal):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/imariusalin/mta24x/main/install.sh | sudo bash
+```
+
+If that clone already finished (Docker installed, then stopped), resume:
+
+```bash
+cd /opt/mta24x && sudo git pull && sudo ./install.sh
 ```
 
 Non-interactive / fleet (one env file per host):

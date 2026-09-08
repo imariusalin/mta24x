@@ -81,6 +81,7 @@ load_env_file() {
 prompt() {
   local var="$1" label="$2" def="${3:-}"
   local cur="${!var:-}"
+  local input
   if [[ -n "$cur" ]]; then
     return 0
   fi
@@ -88,13 +89,21 @@ prompt() {
     [[ -n "$def" ]] && printf -v "$var" '%s' "$def" && return 0
     die "missing $var (set it in --env or the environment)"
   fi
+  # curl | bash leaves stdin as the script pipe. Always ask on the real TTY.
   if [[ -n "$def" ]]; then
-    read -r -p "$label [$def]: " cur
-    cur="${cur:-$def}"
+    input="$label [$def]: "
   else
-    read -r -p "$label: " cur
-    [[ -n "$cur" ]] || die "$var is required"
+    input="$label: "
   fi
+  if [[ -e /dev/tty ]]; then
+    read -r -p "$input" cur </dev/tty || die "could not read $var from the terminal"
+  else
+    die "no terminal for prompts. Re-run: sudo $INSTALL_DIR/install.sh   or pass --non-interactive --env FILE"
+  fi
+  if [[ -z "$cur" ]]; then
+    cur="$def"
+  fi
+  [[ -n "$cur" ]] || die "$var is required"
   printf -v "$var" '%s' "$cur"
 }
 
@@ -192,6 +201,7 @@ write_env() {
   ACME_EMAIL="${ACME_EMAIL:-}"
   DRY_RUN="${DRY_RUN:-true}"
 
+  yellow "Enter domain and the 3 public IPs for this VPS."
   prompt ROOT_DOMAIN "Root domain (example.com)"
   prompt IP_TX "Transactional IP"
   prompt IP_MKT "Marketing IP"
